@@ -17,7 +17,10 @@ from .services import (
     create_order,
     finalize_prato,
      calculate_tma_per_prato,
+     claim_ready_orders_for_print,
      registrar_retirada_total_pedido,
+     mark_ready_order_as_printed,
+     release_order_to_production,
 )
 from .models import Pedido, FilaPrato, Prato, TMA
 
@@ -63,6 +66,7 @@ class CreateOrderAPIView(APIView):
                 "senha": str(pedido.id)[:4].upper(),
                 "tipo": pedido.tipo,
                 "total": float(pedido.total),
+                "criado_em": timezone.localtime(pedido.created_at).strftime("%H:%M:%S"),
                 "status_url": status_url,
                 "itens": [
                     {
@@ -213,17 +217,7 @@ class AtendimentoListaAPIView(APIView):
         pedido = get_object_or_404(Pedido.objects.select_for_update(), id=pedido_id)
 
         if acao == "PRODUCAO":
-            # 1. Atualiza o status do pedido pai
-            # Forçamos a string exata que o banco espera
-            pedido.status = "PRODUCAO" 
-            pedido.save(update_fields=['status'])
-
-            # 2. Atualiza todos os itens da FilaPrato vinculados a este pedido
-            # Isso 'libera' os itens para aparecerem no PainelCozinhaPratoView
-            pedido.filas.all().update(
-                status="PENDENTE",
-                created_at=timezone.now() # Reset do tempo para a fila da cozinha
-            )
+            release_order_to_production(pedido)
 
             return Response({"status": "sucesso", "msg": "Pedido enviado para a cozinha"})
 
@@ -252,7 +246,7 @@ class PainelCozinhaPratoView(APIView):
                     models.When(pedido__tipo='PREFERENCIAL', then=models.Value(0)),
                     default=models.Value(1)
                 ),
-                'created_at'
+                models.functions.Coalesce('released_to_production_at', 'created_at')
             )
 
             if prato_id:
@@ -261,12 +255,13 @@ class PainelCozinhaPratoView(APIView):
             data = []
             agora = timezone.now()
             for fp in queryset:
+                base_espera = fp.released_to_production_at or fp.created_at
                 data.append({
                     "fila_id": str(fp.id),
                     "pedido_id": str(fp.pedido.id),
                     "prato_nome": fp.prato.nome,
                     "tipo": fp.pedido.tipo,
-                    "tempo_espera": int((agora - fp.created_at).total_seconds() / 60)
+                    "tempo_espera": int((agora - base_espera).total_seconds() / 60)
                 })
             
             return Response({"pendentes": data}, status=200)
@@ -366,7 +361,7 @@ class AcompanhamentoPedidoView(View):
 # Painel central
 class DashboardView(View):
     def get(self, request):
-        hoje = timezone.now().date()
+        hoje = timezone.localdate()
         total_geral = FilaPrato.objects.filter(created_at__date=hoje).count()
 
         # Busca pratos e anota as contagens básicas
@@ -420,7 +415,7 @@ class MonitorPedidosAPIView(APIView):
 
             for p in pedidos:
                 senha = str(p.id).split('-')[0][:4].upper() if p.id else "0000"
-                item = {"senha": senha, "tipo": p.tipo}
+                item = {"id": str(p.id), "senha": senha, "tipo": p.tipo}
                 
                 if p.status == Pedido.Status.PENDENTE:
                     data["pendentes"].append(item)
@@ -447,6 +442,37 @@ class MonitorPedidosAPIView(APIView):
             # Verifique o log do seu terminal para ler o que aparecer aqui!
             print(f"--- ERRO NA API DO MONITOR: {e} ---")
             return Response({"error": str(e)}, status=500)
+
+
+class PedidosProntosPendentesImpressaoAPIView(APIView):
+    def get(self, request):
+        pedidos = claim_ready_orders_for_print()
+        data = []
+        for pedido in pedidos:
+            itens_agrupados = pedido.filas.values("prato__nome").annotate(total=Count("id"))
+            data.append(
+                {
+                    "id": str(pedido.id),
+                    "senha": str(pedido.id).split("-")[0][:4].upper(),
+                    "tipo": pedido.tipo,
+                    "itens": [
+                        {"nome": item["prato__nome"], "quantidade": item["total"]}
+                        for item in itens_agrupados
+                    ],
+                }
+            )
+
+        return Response(data, status=200)
+
+
+class MarcarPedidoProntoImpressoAPIView(APIView):
+    def post(self, request, pedido_id):
+        pedido = mark_ready_order_as_printed(pedido_id)
+
+        if not pedido:
+            return Response({"detail": "Pedido não encontrado."}, status=404)
+
+        return Response({"status": "sucesso"}, status=200)
 
 #ALTERAR STATUS PARA RETIRADO DO PEDIDO
 class RetirarPedidoView(APIView):

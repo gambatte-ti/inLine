@@ -1,12 +1,15 @@
 let pedidosData = [];
-let pedidosProntosConhecidos = new Set();
 let pedidosProntosNaFila = new Set();
 let filaImpressaoAutomatica = [];
 let impressaoAutomaticaEmAndamento = false;
-let primeiraCargaImpressao = false;
 let fallbackFimImpressao = null;
+let pedidoImpressaoAtual = null;
+let carregandoAtendimento = false;
+let monitorandoImpressao = false;
 
 async function carregarAtendimento() {
+  if (carregandoAtendimento || document.hidden) return;
+
   const busca = document.getElementById("input-busca")?.value || "";
   const status = document.getElementById("filtro-status")?.value || "";
 
@@ -14,6 +17,7 @@ async function carregarAtendimento() {
   const url = `/api/v1/atendimento/lista/?search=${busca}&status=${status}&t=${Date.now()}`;
 
   try {
+    carregandoAtendimento = true;
     console.log("Tentando carregar lista de:", url);
     const res = await fetch(url);
 
@@ -29,13 +33,13 @@ async function carregarAtendimento() {
     renderizarTabela();
   } catch (e) {
     console.error("Falha crítica ao carregar atendimento:", e);
+  } finally {
+    carregandoAtendimento = false;
   }
 }
 
 // Chamar ao carregar a página
 document.addEventListener("DOMContentLoaded", carregarAtendimento);
-// Atualizar a cada 10 segundos
-setInterval(carregarAtendimento, 10000);
 
 function renderizarTabela() {
   const body = document.getElementById("tabela-pedidos-body");
@@ -143,13 +147,22 @@ function limparCuponsImpressao() {
   cupomConf?.classList.add("hidden");
 }
 
+function formatarHoraAtualImpressao() {
+  return new Date().toLocaleTimeString("pt-BR", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
 function prepararCupomConferencia(p) {
   const cupomCli = document.getElementById("cupom-cliente");
   const cupomConf = document.getElementById("cupom-conferencia");
   const confSenha = document.getElementById("conf-senha");
   const confItens = document.getElementById("conf-itens");
+  const confSaidaHora = document.getElementById("conf-saida-hora");
 
-  if (!cupomCli || !cupomConf || !confSenha || !confItens) {
+  if (!cupomCli || !cupomConf || !confSenha || !confItens || !confSaidaHora) {
     console.error("ERRO: Estrutura do cupom de 58mm não encontrada!");
     return false;
   }
@@ -161,6 +174,7 @@ function prepararCupomConferencia(p) {
 
   // 2. PREENCHIMENTO DOS DADOS
   confSenha.innerText = p.senha;
+  confSaidaHora.innerText = formatarHoraAtualImpressao();
 
   const listaItens = p.itens || p.itens_resumo || [];
   const itensHTML = listaItens
@@ -180,8 +194,26 @@ function prepararCupomConferencia(p) {
   return true;
 }
 
-function finalizarImpressaoAutomatica() {
+async function marcarPedidoComoImpresso(pedidoId) {
+  if (!pedidoId) return;
+
+  try {
+    await fetch(`/api/v1/monitor/pedidos/${pedidoId}/impresso/`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRFToken": getCsrfToken(),
+      },
+    });
+  } catch (e) {
+    console.error("Erro ao confirmar impressão automática:", e);
+  }
+}
+
+async function finalizarImpressaoAutomatica() {
   if (!impressaoAutomaticaEmAndamento) return;
+
+  const pedidoFinalizado = pedidoImpressaoAtual;
 
   if (fallbackFimImpressao) {
     clearTimeout(fallbackFimImpressao);
@@ -190,6 +222,11 @@ function finalizarImpressaoAutomatica() {
 
   limparCuponsImpressao();
   impressaoAutomaticaEmAndamento = false;
+  pedidoImpressaoAtual = null;
+  await marcarPedidoComoImpresso(pedidoFinalizado?.id);
+  if (pedidoFinalizado?.id) {
+    pedidosProntosNaFila.delete(pedidoFinalizado.id);
+  }
   processarFilaImpressaoAutomatica();
 }
 
@@ -201,15 +238,17 @@ function processarFilaImpressaoAutomatica() {
   const proximoPedido = filaImpressaoAutomatica.shift();
   if (!proximoPedido) return;
 
-  pedidosProntosNaFila.delete(proximoPedido.senha);
-
   const prontoParaImprimir = prepararCupomConferencia(proximoPedido);
   if (!prontoParaImprimir) {
+    if (proximoPedido.id) {
+      pedidosProntosNaFila.delete(proximoPedido.id);
+    }
     processarFilaImpressaoAutomatica();
     return;
   }
 
   impressaoAutomaticaEmAndamento = true;
+  pedidoImpressaoAtual = proximoPedido;
 
   // 3. DISPARO DA IMPRESSÃO
   setTimeout(() => {
@@ -220,12 +259,12 @@ function processarFilaImpressaoAutomatica() {
 }
 
 function enfileirarImpressaoAutomatica(p) {
-  if (!p?.senha || pedidosProntosNaFila.has(p.senha)) {
+  if (!p?.id || pedidosProntosNaFila.has(p.id)) {
     return;
   }
 
   filaImpressaoAutomatica.push(p);
-  pedidosProntosNaFila.add(p.senha);
+  pedidosProntosNaFila.add(p.id);
   processarFilaImpressaoAutomatica();
 }
 
@@ -287,42 +326,31 @@ function getCsrfToken() {
 }
 
 async function monitorarPedidosParaImpressao() {
+  if (monitorandoImpressao || document.hidden) return;
+
   try {
-    // Esta API deve retornar os pedidos que acabaram de ser FINALIZADOS na cozinha
-    const res = await fetch("/api/v1/monitor/pedidos/");
+    monitorandoImpressao = true;
+    const res = await fetch("/api/v1/monitor/pedidos-prontos-impressao/");
     if (!res.ok) return;
     const data = await res.json();
 
-    // Sincronização inicial: na primeira carga, apenas memorizamos o que já está pronto
-    if (!primeiraCargaImpressao) {
-      data.prontos.forEach((p) => pedidosProntosConhecidos.add(p.senha));
-      primeiraCargaImpressao = true;
-      return;
-    }
+    data.forEach((p) => {
+      console.log(`Pedido pronto pendente de impressão: #${p.senha}`);
 
-    // Verifica se surgiu algo novo para imprimir
-    data.prontos.forEach((p) => {
-      if (!pedidosProntosConhecidos.has(p.senha)) {
-        console.log(`Imprimindo automaticamente pedido pronto: #${p.senha}`);
-
-        enfileirarImpressaoAutomatica(p);
-
-        // Registra para não imprimir de novo
-        pedidosProntosConhecidos.add(p.senha);
-
-        // Opcional: Atualiza a tabela de atendimento para mostrar o status novo
-        carregarAtendimento();
-      }
+      enfileirarImpressaoAutomatica(p);
     });
   } catch (e) {
     console.error("Erro no monitor de auto-impressão:", e);
+  } finally {
+    monitorandoImpressao = false;
   }
 }
 
 window.addEventListener("afterprint", finalizarImpressaoAutomatica);
 
 // Inicia o monitoramento
-setInterval(monitorarPedidosParaImpressao, 7000);
+document.addEventListener("DOMContentLoaded", monitorarPedidosParaImpressao);
+setInterval(monitorarPedidosParaImpressao, 5000);
 
 // Eventos de Busca
 document
@@ -331,4 +359,11 @@ document
 document
   .getElementById("filtro-status")
   ?.addEventListener("change", carregarAtendimento);
-setInterval(carregarAtendimento, 15000); // Refresh automático a cada 15s
+setInterval(carregarAtendimento, 12000);
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) {
+    carregarAtendimento();
+    monitorarPedidosParaImpressao();
+  }
+});

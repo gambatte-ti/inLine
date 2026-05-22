@@ -301,6 +301,57 @@ Estado:
 
 ---
 
+## 🧪 Ambiente Local
+
+Crie a virtualenv na **raiz do repositório**:
+
+```bash
+cd /home/cassiano/workspace/inLine
+python3 -m venv .venv
+```
+
+Se o Python reclamar de `ensurepip`, instale antes os pacotes de sistema:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y python3-venv python3-pip
+```
+
+Depois ative a virtualenv e instale as dependências do projeto:
+
+```bash
+source .venv/bin/activate
+pip install -r inLine/requirements.txt
+```
+
+O projeto Django fica dentro da pasta `inLine/`, então os comandos de gestão devem ser rodados nela:
+
+```bash
+cd inLine
+python manage.py migrate
+python manage.py runserver 0.0.0.0:8000
+```
+
+---
+
+## ✅ Testes
+
+A suíte foi organizada em `inLine/core/tests/` e cobre:
+
+- services de criação/finalização/retirada/TMA
+- APIs principais de cardápio, pedidos, atendimento, produção e monitor
+- middleware de licença
+- smoke tests das páginas HTML
+
+Para rodar:
+
+```bash
+cd /home/cassiano/workspace/inLine/inLine
+make test
+```
+
+---
+
 ## 🛡️ Restrições de Projeto
 
 ❌ Sem Redis

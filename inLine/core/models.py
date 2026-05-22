@@ -25,6 +25,9 @@ class Pedido(models.Model):
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDENTE, db_index=True)
     total = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    ready_printed_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    ready_print_claimed_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    ready_print_claim_token = models.UUIDField(null=True, blank=True, db_index=True)
 
     class Meta:
         indexes = [
@@ -70,6 +73,7 @@ class FilaPrato(models.Model):
     finished_at = models.DateTimeField(null=True, blank=True, db_index=True)
     usado_em_metrica = models.BooleanField(default=False, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    released_to_production_at = models.DateTimeField(null=True, blank=True, db_index=True)
     updated_at = models.DateTimeField(auto_now=True)
     delivered_at = models.DateTimeField(null=True, blank=True)
 
@@ -99,4 +103,3 @@ class TMA(models.Model):
     class Meta:
         verbose_name = "Métrica TMA"
         ordering = ['-calculado_em']
-

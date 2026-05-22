@@ -1,7 +1,22 @@
 // static/js/producao.js
+const itensEmFinalizacao = new Set();
+let painelAtualizando = false;
+
+function atualizarEstadoBotaoFinalizacao(filaId, emFinalizacao) {
+  const botao = document.querySelector(`[data-fila-id="${filaId}"]`);
+  if (!botao) return;
+
+  botao.disabled = emFinalizacao;
+  botao.className = `w-full ${emFinalizacao ? "bg-slate-400 cursor-wait" : "bg-gray-900 hover:bg-green-600"} text-white py-3 rounded-xl font-bold transition-all`;
+  botao.textContent = emFinalizacao ? "CONCLUINDO..." : "CONCLUIR";
+}
 
 // 1. Função Global de Finalização (acessada pelo onclick)
 async function finalizarItem(filaId) {
+  if (itensEmFinalizacao.has(filaId)) return;
+
+  itensEmFinalizacao.add(filaId);
+  atualizarEstadoBotaoFinalizacao(filaId, true);
   console.log("Tentando finalizar item:", filaId);
   try {
     const res = await fetch(`/api/v1/fila/finalizar/${filaId}/`, {
@@ -14,21 +29,24 @@ async function finalizarItem(filaId) {
 
     if (res.ok) {
       console.log("Item finalizado com sucesso");
-      atualizarPainel(); // Recarrega a tela
     } else {
       console.error("Erro na resposta do servidor ao finalizar");
     }
   } catch (e) {
     console.error("Falha na requisição de finalização:", e);
+  } finally {
+    itensEmFinalizacao.delete(filaId);
+    atualizarPainel(); // Recarrega a tela
   }
 }
 
 // 2. Função de Atualização do Painel
 async function atualizarPainel() {
   const container = document.getElementById("painel-estacoes");
-  if (!container) return;
+  if (!container || painelAtualizando || document.hidden) return;
 
   try {
+    painelAtualizando = true;
     const res = await fetch("/api/v1/fila/painel/");
     const data = await res.json();
     const pendentes = data.pendentes || [];
@@ -59,8 +77,10 @@ async function atualizarPainel() {
                                 <div class="text-[10px] font-black text-gray-400 mb-2 uppercase">${item.tipo}</div>
                                 <div class="text-2xl font-black text-gray-900 mb-4">#${item.pedido_id.slice(0, 4).toUpperCase()}</div>
                                 <button onclick="finalizarItem('${item.fila_id}')" 
-                                    class="w-full bg-gray-900 hover:bg-green-600 text-white py-3 rounded-xl font-bold transition-all">
-                                    CONCLUIR
+                                    data-fila-id="${item.fila_id}"
+                                    ${itensEmFinalizacao.has(item.fila_id) ? "disabled" : ""}
+                                    class="w-full ${itensEmFinalizacao.has(item.fila_id) ? "bg-slate-400 cursor-wait" : "bg-gray-900 hover:bg-green-600"} text-white py-3 rounded-xl font-bold transition-all">
+                                    ${itensEmFinalizacao.has(item.fila_id) ? "CONCLUINDO..." : "CONCLUIR"}
                                 </button>
                             </div>
                         `,
@@ -72,6 +92,8 @@ async function atualizarPainel() {
       });
   } catch (e) {
     console.error("Erro ao atualizar painel:", e);
+  } finally {
+    painelAtualizando = false;
   }
 }
 
@@ -94,5 +116,11 @@ function getCookie(name) {
 // 4. Inicialização
 document.addEventListener("DOMContentLoaded", () => {
   atualizarPainel();
-  setInterval(atualizarPainel, 5000);
+  setInterval(atualizarPainel, 7000);
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) {
+    atualizarPainel();
+  }
 });

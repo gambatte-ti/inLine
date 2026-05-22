@@ -7,6 +7,7 @@ from .views import (
     AcompanhamentoPedidoView,DashboardView, MonitorPedidosView, MonitorPedidosAPIView,
     RetirarPedidoView,BaixaEntregaView,UpdatePratoAPIView,
     PainelQuantitativoProducaoAPIView,AtendimentoListaAPIView, PainelPorPratoView,
+    PedidosProntosPendentesImpressaoAPIView, MarcarPedidoProntoImpressoAPIView,
 )
 
 urlpatterns = [
@@ -32,6 +33,8 @@ urlpatterns = [
     path('api/v1/fila/finalizar/<uuid:id>/', FinalizarPratoView.as_view(), name='finalizar-prato'),
     path('api/v1/metrica/tma-dashboard/', TMADashboardAPIView.as_view(), name='tma'),
     path('api/v1/monitor/pedidos/', MonitorPedidosAPIView.as_view(), name='api-monitor-pedidos'),
+    path('api/v1/monitor/pedidos-prontos-impressao/', PedidosProntosPendentesImpressaoAPIView.as_view(), name='api-monitor-pedidos-prontos-impressao'),
+    path('api/v1/monitor/pedidos/<uuid:pedido_id>/impresso/', MarcarPedidoProntoImpressoAPIView.as_view(), name='api-monitor-marcar-impresso'),
     path('api/v1/pedidos/retirar/<uuid:pedido_id>/', RetirarPedidoView.as_view(), name='retirar-pedido'),   
     path('api/v1/pratos/editar/<uuid:prato_id>/', UpdatePratoAPIView.as_view(), name='editar-prato'),
     path('api/v1/producao/quantitativo/', PainelQuantitativoProducaoAPIView.as_view()),

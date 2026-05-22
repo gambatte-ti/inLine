@@ -2,6 +2,7 @@ let carrinho = {};
 let modoEdicao = false;
 let pratosCache = [];
 let processandoPedido = false;
+let carregandoMenu = false;
 
 // Função para obter o CSRF Token do elemento HTML
 function getCsrfToken() {
@@ -9,7 +10,10 @@ function getCsrfToken() {
 }
 
 async function carregarMenu() {
+  if (carregandoMenu) return;
+
   try {
+    carregandoMenu = true;
     const res = await fetch("/api/v1/pratos/");
     pratosCache = await res.json();
     const grid = document.getElementById("grid-produtos");
@@ -44,6 +48,8 @@ async function carregarMenu() {
       .join("");
   } catch (e) {
     console.error("Erro ao carregar menu:", e);
+  } finally {
+    carregandoMenu = false;
   }
 }
 
@@ -230,3 +236,15 @@ async function salvarEdicao() {
 }
 
 window.onload = carregarMenu;
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) {
+    carregarMenu();
+  }
+});
+
+setInterval(() => {
+  if (!document.hidden && !processandoPedido && !modoEdicao) {
+    carregarMenu();
+  }
+}, 20000);

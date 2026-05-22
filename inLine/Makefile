@@ -10,6 +10,7 @@ help:
 	@echo "  make install    - Instala dependências, gera migrações e aplica no banco"
 	@echo "  make run        - Inicia o servidor de desenvolvimento"
 	@echo "  make migrate    - Gera e aplica novas migrações"
+	@echo "  make test       - Executa a suíte de testes do core"
 	@echo "  make superuser  - Cria um administrador para o sistema"
 	@echo "  make clean      - Remove arquivos temporários e cache"
 
@@ -29,6 +30,9 @@ superuser:
 
 run:
 	$(PYTHON) $(MANAGE) runserver 0.0.0.0:8000
+
+test:
+	$(PYTHON) $(MANAGE) test core.tests -v 2
 
 clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} +
