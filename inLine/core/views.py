@@ -63,11 +63,12 @@ class CreateOrderAPIView(APIView):
         itens = request.data.get("itens", [])
         
         # A API recebe o texto que o JavaScript enviou (o número do terminal)
-        terminal_caixa = request.data.get("caixa", "Não Identificado")
+        terminal_caixa = request.data.get("caixa")
         
         try:
             # Envia o texto para o service
             pedido = create_order(tipo=tipo, itens=itens, caixa=terminal_caixa)
+            print(pedido)  # Verifique o console para ver os detalhes do pedido criado
             
             host = request.get_host() 
             status_url = f"http://{host}/acompanhamento/{str(pedido.id)}/"

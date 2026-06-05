@@ -115,12 +115,13 @@ function alterarQtd(id, delta) {
 
 async function finalizarPedido(tipo) {
   if (processandoPedido) return;
+  const caixa = document.getElementById("terminal").value.trim();
+  if (!caixa) return alert("Por favor, informe o número do terminal.");
   const itens = Object.keys(carrinho).map((id) => ({
     prato_id: id,
     quantidade: carrinho[id].qtd,
   }));
   if (itens.length === 0) return alert("Carrinho vazio!");
-
   try {
     processandoPedido = true;
     const res = await fetch("/api/v1/pedidos/criar/", {
@@ -129,7 +130,7 @@ async function finalizarPedido(tipo) {
         "Content-Type": "application/json",
         "X-CSRFToken": getCsrfToken(), // Chamada da função utilitária
       },
-      body: JSON.stringify({ tipo, itens }),
+      body: JSON.stringify({ tipo, itens, caixa }),
     });
 
     const dados = await res.json();

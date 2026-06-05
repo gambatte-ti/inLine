@@ -25,7 +25,7 @@ def gerar_senha_aleatoria():
             return senha
 
 @transaction.atomic
-def create_order(tipo, itens, caixa=None):
+def create_order(tipo, itens, caixa):
     """
     Cria um pedido associado a um caixa específico, deduz os itens do estoque
     e define os status iniciais do fluxo.
