@@ -1,6 +1,6 @@
+import random
 import uuid
-from datetime import timedelta
-
+from decimal import Decimal
 from django.db import transaction, models
 from django.core.exceptions import ValidationError
 from django.utils import timezone
@@ -11,185 +11,106 @@ from django.db.models import F
 # CAIXA
 # =========================
 
+def gerar_senha_aleatoria():
+    # 1. Busca todas as senhas de pedidos que ainda estão rolando no restaurante
+    senhas_ativas = Pedido.objects.exclude(
+        status__in=[Pedido.Status.RETIRADO, Pedido.Status.CANCELADO]
+    ).values_list('senha_numero', flat=True)
+    
+    # 2. Sorteia um número de 4 dígitos (entre 1000 e 9999). 
+    # Se bater com a senha de alguém que ainda está esperando, sorteia outro.
+    while True:
+        senha = random.randint(1000, 9999)
+        if senha not in senhas_ativas:
+            return senha
+
 @transaction.atomic
-def create_order(tipo, itens):
-    if not itens:
-        raise ValueError("Pedido sem itens.")
-
-    itens_normalizados = {}
-    for item in itens:
-        prato_id = str(item["prato_id"])
-        quantidade = int(item["quantidade"])
-
-        if quantidade <= 0:
-            raise ValueError("Quantidade inválida no pedido.")
-
-        itens_normalizados[prato_id] = itens_normalizados.get(prato_id, 0) + quantidade
-
-    pratos = {
-        str(prato.id): prato
-        for prato in Prato.objects.filter(id__in=itens_normalizados.keys())
-    }
-
-    if len(pratos) != len(itens_normalizados):
-        raise ValueError("Um ou mais pratos não foram encontrados.")
-
+def create_order(tipo, itens, caixa=None):
+    """
+    Cria um pedido associado a um caixa específico, deduz os itens do estoque
+    e define os status iniciais do fluxo.
+    """
+    # Chama a sua função existente de senha aleatória segura
+    nova_senha = gerar_senha_aleatoria()
+    
+    # GATILHO: O Pedido agora já nasce como PRODUCAO e recebe o caixa logado
+    pedido = Pedido.objects.create(
+        tipo=tipo, 
+        total=0,
+        status=Pedido.Status.PENDENTE,  # <--- Alterado de PENDENTE para PRODUCAO
+        senha_numero=nova_senha,
+        caixa=caixa                     # <--- Novo campo que identifica o operador
+    )
+    
     total_acumulado = 0
-    filas_para_criar = []
 
-    for prato_id, qtd in itens_normalizados.items():
-        prato = pratos[prato_id]
+    for item in itens:
+        prato_id = item["prato_id"]
+        qtd = int(item["quantidade"])
 
-        atualizado = Prato.objects.filter(id=prato.id, estoque__gte=qtd).update(
-            estoque=F("estoque") - qtd
-        )
-        if atualizado == 0:
+        prato = Prato.objects.select_for_update().get(id=prato_id)
+        if prato.estoque < qtd:
             raise ValueError(f"Estoque insuficiente para {prato.nome}")
 
-        total_acumulado += prato.preco * qtd
-        filas_para_criar.extend(
-            FilaPrato(
+        Prato.objects.filter(id=prato_id).update(estoque=F('estoque') - qtd)
+        prato.refresh_from_db()
+        total_acumulado += (prato.preco * qtd)
+
+        for _ in range(qtd):
+            # Os itens da fila mantêm-se como PENDENTE aguardando a cozinha puxar
+            FilaPrato.objects.create(
+                pedido=pedido,
                 prato=prato,
                 preco_unitario=prato.preco,
+                status=FilaPrato.Status.PENDENTE
             )
-            for _ in range(qtd)
-        )
 
-    pedido = Pedido.objects.create(tipo=tipo, total=total_acumulado)
-
-    for fila in filas_para_criar:
-        fila.pedido = pedido
-
-    FilaPrato.objects.bulk_create(filas_para_criar)
+    pedido.total = total_acumulado
+    pedido.save(update_fields=['total'])
+    
     return pedido
+
+def iniciar_producao_item(fila_id):
+    # Força UUID se necessário
+    if isinstance(fila_id, str):
+        fila_id = uuid.UUID(fila_id)
+
+    item = FilaPrato.objects.select_related('pedido').get(id=fila_id)
+    
+    if not item.started_at:
+        item.started_at = timezone.now()  
+        item.status = FilaPrato.Status.EM_PRODUCAO
+        item.save(update_fields=['started_at', 'status'])
+        
+        # 2. A MÁGICA AQUI: Se o pedido pai ainda está PENDENTE, 
+        # o clique do cozinheiro muda ele para PRODUCAO automaticamente.
+        if item.pedido.status == Pedido.Status.PENDENTE:
+            item.pedido.status = Pedido.Status.PRODUCAO
+            item.pedido.save(update_fields=['status'])
+            
+    return item
 
 # =========================
 # INICIAR PRATO
 # =========================
 
 def iniciar_producao_item(fila_id):
+    # Força a conversão de string para UUID caso necessário para o banco
+    if isinstance(fila_id, str):
+        fila_id = uuid.UUID(fila_id)
+
     item = FilaPrato.objects.get(id=fila_id)
-    if not item.started_at:
-        item.started_at = timezone.now()  # Registra o início REAL
-        item.status = FilaPrato.Status.EM_PRODUCAO
+    # Validação segura por string (ignora se o started_at já existir por algum bug do banco)
+    if str(item.status) == 'PENDENTE':
+        item.started_at = timezone.now()  
+        item.status = 'EM_PRODUCAO'
         item.save(update_fields=['started_at', 'status'])
+        
+    # ATUALIZAÇÃO DO PAI: Se o pedido ainda está PENDENTE, vira PRODUCAO
+    if str(item.pedido.status) == 'PENDENTE':
+        item.pedido.status = 'PRODUCAO'
+        item.pedido.save(update_fields=['status'])
     return item
-
-
-def release_order_to_production(pedido):
-    agora = timezone.now()
-
-    pedido.status = Pedido.Status.PRODUCAO
-    pedido.save(update_fields=["status"])
-
-    pedido.filas.exclude(status=FilaPrato.Status.CANCELADO).update(
-        status=FilaPrato.Status.PENDENTE,
-        released_to_production_at=agora,
-    )
-
-    return pedido
-
-
-def recalculate_pedido_status(pedido):
-    status_counts = {
-        row["status"]: row["total"]
-        for row in pedido.filas.values("status").annotate(total=models.Count("id"))
-    }
-    total_itens = sum(status_counts.values())
-
-    if total_itens == 0:
-        return pedido
-
-    has_open_items = any(
-        status_counts.get(status, 0) > 0
-        for status in [FilaPrato.Status.PENDENTE, FilaPrato.Status.EM_PRODUCAO]
-    )
-
-    if has_open_items:
-        if pedido.status in [Pedido.Status.PRODUCAO, Pedido.Status.FINALIZADO]:
-            pedido.status = Pedido.Status.PRODUCAO
-            pedido.save(update_fields=["status"])
-        return pedido
-
-    total_retirados = status_counts.get(FilaPrato.Status.RETIRADO, 0)
-    total_cancelados = status_counts.get(FilaPrato.Status.CANCELADO, 0)
-
-    if total_retirados == total_itens:
-        if pedido.status != Pedido.Status.RETIRADO:
-            pedido.status = Pedido.Status.RETIRADO
-            pedido.save(update_fields=["status"])
-        return pedido
-
-    if total_cancelados == total_itens:
-        if pedido.status != Pedido.Status.CANCELADO:
-            pedido.status = Pedido.Status.CANCELADO
-            pedido.save(update_fields=["status"])
-        return pedido
-
-    has_ready_items = any(
-        status_counts.get(status, 0) > 0
-        for status in [FilaPrato.Status.FINALIZADO, FilaPrato.Status.RETIRADO]
-    )
-
-    if has_ready_items:
-        fields_to_update = []
-        if pedido.status != Pedido.Status.FINALIZADO:
-            pedido.status = Pedido.Status.FINALIZADO
-            fields_to_update.append("status")
-        if pedido.ready_printed_at is not None:
-            pedido.ready_printed_at = None
-            fields_to_update.append("ready_printed_at")
-        if pedido.ready_print_claimed_at is not None:
-            pedido.ready_print_claimed_at = None
-            fields_to_update.append("ready_print_claimed_at")
-        if pedido.ready_print_claim_token is not None:
-            pedido.ready_print_claim_token = None
-            fields_to_update.append("ready_print_claim_token")
-
-        if fields_to_update:
-            pedido.save(update_fields=fields_to_update)
-
-    return pedido
-
-
-def claim_ready_orders_for_print(limit=20, claim_timeout=timedelta(minutes=3)):
-    now = timezone.now()
-    stale_before = now - claim_timeout
-    claim_token = uuid.uuid4()
-
-    with transaction.atomic():
-        candidate_ids = list(
-            Pedido.objects.filter(
-                status__in=[Pedido.Status.FINALIZADO, Pedido.Status.RETIRADO],
-                ready_printed_at__isnull=True,
-            )
-            .filter(
-                models.Q(ready_print_claimed_at__isnull=True)
-                | models.Q(ready_print_claimed_at__lt=stale_before)
-            )
-            .order_by("created_at")
-            .values_list("id", flat=True)[:limit]
-        )
-
-        if not candidate_ids:
-            return []
-
-        Pedido.objects.filter(
-            id__in=candidate_ids,
-            ready_printed_at__isnull=True,
-        ).filter(
-            models.Q(ready_print_claimed_at__isnull=True)
-            | models.Q(ready_print_claimed_at__lt=stale_before)
-        ).update(
-            ready_print_claimed_at=now,
-            ready_print_claim_token=claim_token,
-        )
-
-        return list(
-            Pedido.objects.filter(ready_print_claim_token=claim_token)
-            .prefetch_related("filas__prato")
-            .order_by("created_at")
-        )
 
 # =========================
 # FINALIZAÇÃO DE PRATO
@@ -203,14 +124,7 @@ def finalize_prato(fila_id):
             # 1. Busca o item com lock para evitar concorrência
             item = FilaPrato.objects.select_for_update().filter(id=fila_id).first()
 
-            if not item or item.status in [
-                FilaPrato.Status.FINALIZADO,
-                FilaPrato.Status.RETIRADO,
-                FilaPrato.Status.CANCELADO,
-            ]:
-                return None
-
-            if item.pedido.status != Pedido.Status.PRODUCAO:
+            if not item or item.status == FilaPrato.Status.FINALIZADO:
                 return None
 
             agora = timezone.now()
@@ -219,7 +133,7 @@ def finalize_prato(fila_id):
             # Se o item não tiver hora de início (pulou a etapa 'em produção'), 
             # assumimos que começou agora para não quebrar o cálculo.
             if not item.started_at:
-                item.started_at = item.released_to_production_at or item.created_at
+                item.started_at = item.created_at
 
             item.finished_at = agora  # Define o fim da produção AGORA
             item.status = FilaPrato.Status.FINALIZADO
@@ -230,7 +144,13 @@ def finalize_prato(fila_id):
 
             # 4. Atualização do Pedido (se todos os itens do pedido acabaram)
             pedido = item.pedido
-            recalculate_pedido_status(pedido)
+            itens_abertos = FilaPrato.objects.filter(pedido=pedido).exclude(
+                status__in=[FilaPrato.Status.FINALIZADO, FilaPrato.Status.RETIRADO]
+            ).exists()
+
+            if not itens_abertos:
+                pedido.status = Pedido.Status.FINALIZADO
+                pedido.save(update_fields=['status'])
             
             return item
     except Exception as e:
@@ -312,7 +232,7 @@ def registrar_retirada_total_pedido(pedido_id):
             total_itens = pedido.filas.count()
             
             # 3. Conta quantos desses itens já estão FINALIZADOS
-            total_finalizados = pedido.filas.filter(status=FilaPrato.Status.FINALIZADO).count()
+            total_finalizados = pedido.filas.filter(status=Pedido.Status.FINALIZADO).count()
 
             # REGRA DE OURO: Só passa se o total for igual ao finalizado
             if total_itens != total_finalizados:
@@ -322,41 +242,15 @@ def registrar_retirada_total_pedido(pedido_id):
 
             # 4. Se chegou aqui, todos estão prontos. Então damos baixa em tudo:
             pedido.filas.all().update(
-                status=FilaPrato.Status.RETIRADO, 
+                status=Pedido.Status.RETIRADO, 
                 delivered_at=timezone.now()
             )
             
             # 5. Atualiza o status do Pedido pai
-            recalculate_pedido_status(pedido)
+            pedido.status = Pedido.Status.RETIRADO
+            pedido.save(update_fields=['status'])
             
             return pedido
             
     except Pedido.DoesNotExist:
         return None
-
-
-def mark_ready_order_as_printed(pedido_id):
-    with transaction.atomic():
-        pedido = Pedido.objects.select_for_update().filter(id=pedido_id).first()
-
-        if not pedido:
-            return None
-
-        if pedido.status not in [Pedido.Status.FINALIZADO, Pedido.Status.RETIRADO]:
-            return pedido
-
-        update_fields = []
-        if pedido.ready_printed_at is None:
-            pedido.ready_printed_at = timezone.now()
-            update_fields.append("ready_printed_at")
-        if pedido.ready_print_claimed_at is not None:
-            pedido.ready_print_claimed_at = None
-            update_fields.append("ready_print_claimed_at")
-        if pedido.ready_print_claim_token is not None:
-            pedido.ready_print_claim_token = None
-            update_fields.append("ready_print_claim_token")
-
-        if update_fields:
-            pedido.save(update_fields=update_fields)
-
-        return pedido

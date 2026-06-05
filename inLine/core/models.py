@@ -1,5 +1,6 @@
 import uuid
 from django.db import models
+from django.contrib.auth.models import User
 
 
 
@@ -21,18 +22,28 @@ class Pedido(models.Model):
         CANCELADO="CANCELADO"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    senha_numero = models.IntegerField(null=True, blank=True, db_index=True)
     tipo = models.CharField(max_length=20, choices=Tipo.choices, db_index=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDENTE, db_index=True)
     total = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
-    ready_printed_at = models.DateTimeField(null=True, blank=True, db_index=True)
-    ready_print_claimed_at = models.DateTimeField(null=True, blank=True, db_index=True)
-    ready_print_claim_token = models.UUIDField(null=True, blank=True, db_index=True)
+
+    updated_at = models.DateTimeField(auto_now=True, db_index=True) # Essencial para a fila da Expedição
+    caixa = models.CharField(
+        max_length=50, 
+        null=True, 
+        blank=True, 
+        help_text="Identificador digitado no terminal (Ex: Caixa 01)"
+    )
 
     class Meta:
         indexes = [
             models.Index(fields=["status", "tipo", "created_at"]),
+            models.Index(fields=["status", "updated_at"]),
         ]
+    
+    def __str__(self):
+        return f"Pedido #{self.senha_numero} - Terminal: {self.caixa or 'Não info'}"
 
 # =========================
 # PRATO (CATÁLOGO)
@@ -73,7 +84,6 @@ class FilaPrato(models.Model):
     finished_at = models.DateTimeField(null=True, blank=True, db_index=True)
     usado_em_metrica = models.BooleanField(default=False, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
-    released_to_production_at = models.DateTimeField(null=True, blank=True, db_index=True)
     updated_at = models.DateTimeField(auto_now=True)
     delivered_at = models.DateTimeField(null=True, blank=True)
 
@@ -103,3 +113,4 @@ class TMA(models.Model):
     class Meta:
         verbose_name = "Métrica TMA"
         ordering = ['-calculado_em']
+

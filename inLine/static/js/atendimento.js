@@ -1,51 +1,70 @@
 let pedidosData = [];
+let pedidosProntosConhecidos = new Set();
 let pedidosProntosNaFila = new Set();
 let filaImpressaoAutomatica = [];
 let impressaoAutomaticaEmAndamento = false;
+let primeiraCargaImpressao = false;
 let fallbackFimImpressao = null;
-let pedidoImpressaoAtual = null;
-let carregandoAtendimento = false;
-let monitorandoImpressao = false;
 
 async function carregarAtendimento() {
-  if (carregandoAtendimento || document.hidden) return;
-
   const busca = document.getElementById("input-busca")?.value || "";
   const status = document.getElementById("filtro-status")?.value || "";
 
-  // IMPORTANTE: A barra no final '/' evita o erro 404 em muitas configurações de servidor
   const url = `/api/v1/atendimento/lista/?search=${busca}&status=${status}&t=${Date.now()}`;
 
   try {
-    carregandoAtendimento = true;
-    console.log("Tentando carregar lista de:", url);
     const res = await fetch(url);
-
-    if (!res.ok) {
-      throw new Error(`Erro HTTP: ${res.status}`);
-    }
+    if (!res.ok) throw new Error(`Erro HTTP: ${res.status}`);
 
     const pedidos = await res.json();
-    console.log("Pedidos recebidos:", pedidos);
-
-    // Se a lista vier vazia, pedidosData será []
     pedidosData = pedidos;
     renderizarTabela();
   } catch (e) {
     console.error("Falha crítica ao carregar atendimento:", e);
-  } finally {
-    carregandoAtendimento = false;
   }
 }
 
-// Chamar ao carregar a página
 document.addEventListener("DOMContentLoaded", carregarAtendimento);
 
 function renderizarTabela() {
   const body = document.getElementById("tabela-pedidos-body");
-  body.innerHTML = pedidosData
-    .map(
-      (p) => `
+
+  // Obtém o valor digitado na caixa de busca
+  const termoBusca = (document.getElementById("input-busca")?.value || "")
+    .toLowerCase()
+    .trim();
+
+  // Filtra os dados no frontend (muito mais rápido que esperar a API)
+  const pedidosFiltrados = pedidosData.filter((p) => {
+    // Procura o texto digitado na senha
+    return String(p.senha).toLowerCase().includes(termoBusca);
+  });
+
+  if (pedidosFiltrados.length === 0) {
+    if (termoBusca) {
+      body.innerHTML = `<tr><td colspan="5" class="p-8 text-center text-slate-400 font-bold uppercase tracking-widest">Nenhuma senha contendo "${termoBusca}" encontrada.</td></tr>`;
+    } else {
+      body.innerHTML = `<tr><td colspan="5" class="p-8 text-center text-slate-400 font-bold uppercase tracking-widest">Nenhum pedido na fila.</td></tr>`;
+    }
+    return;
+  }
+
+  body.innerHTML = pedidosFiltrados
+    .map((p) => {
+      let badgeStatus = "";
+      if (p.status === "PENDENTE") {
+        badgeStatus = `<span class="bg-slate-100 text-slate-600 border border-slate-200 px-3 py-1 rounded-full text-[10px] font-black uppercase">Aguardando Cozinha</span>`;
+      } else if (p.status === "PRODUCAO") {
+        badgeStatus = `<span class="bg-amber-100 text-amber-700 border border-amber-200 px-3 py-1 rounded-full text-[10px] font-black uppercase flex items-center gap-1 w-max"><span class="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span> Em Preparo</span>`;
+      } else if (p.status === "FINALIZADO") {
+        badgeStatus = `<span class="bg-green-100 text-green-700 border border-green-200 px-3 py-1 rounded-full text-[10px] font-black uppercase">Pronto para Entrega</span>`;
+      } else if (p.status === "RETIRADO") {
+        badgeStatus = `<span class="bg-blue-100 text-blue-700 border border-blue-200 px-3 py-1 rounded-full text-[10px] font-black uppercase">Entregue</span>`;
+      } else if (p.status === "CANCELADO") {
+        badgeStatus = `<span class="bg-red-100 text-red-700 border border-red-200 px-3 py-1 rounded-full text-[10px] font-black uppercase">Cancelado</span>`;
+      }
+
+      return `
         <tr class="border-b border-slate-50 hover:bg-blue-50/50 transition-colors">
             <td class="p-4 text-xs font-mono text-slate-400">${p.criado_em}</td>
             <td class="p-4 font-black text-xl text-blue-600">#${p.senha}</td>
@@ -55,85 +74,76 @@ function renderizarTabela() {
                 </span>
             </td>
             <td class="p-4">
-                <span class="font-bold text-xs ${getStatusColor(p.status)}">${p.status}</span>
+                ${badgeStatus}
             </td>
             <td class="p-4 flex gap-2 justify-center">
-                <button onclick="reimprimirCaixa('${p.id}')" class="p-2 bg-slate-100 hover:bg-slate-200 rounded-lg" title="Recibo Caixa">🖨️ Caixa</button>
-                <button onclick="reimprimirConferencia('${p.id}')" class="p-2 bg-amber-100 hover:bg-amber-200 rounded-lg">📋 Montar</button> 
+                <button onclick="reimprimirCaixa('${p.id}')" class="px-3 py-2 bg-slate-100 hover:bg-slate-200 rounded-xl font-bold text-xs uppercase tracking-widest text-slate-600 transition-all" title="Recibo Caixa">🖨️ Caixa</button>
+                <button onclick="reimprimirConferencia('${p.id}')" class="px-3 py-2 bg-amber-100 hover:bg-amber-200 rounded-xl font-bold text-xs uppercase tracking-widest text-amber-700 transition-all">📋 Montar</button> 
+                
                 ${
-                  p.status === "PENDENTE"
+                  // NOVO: O botão de Entregar só aparece se a cozinha finalizou o pedido
+                  p.status === "FINALIZADO"
                     ? `
-                      <button onclick="alterarStatus('${p.id}', 'PRODUCAO')" 
-                              class="px-4 py-2 bg-blue-600 text-white rounded-xl font-black hover:bg-blue-700 transition-all">
-                          🚀 ENVIAR P/ PRODUÇÃO
+                      <button onclick="retirarPedido('${p.id}')" 
+                              class="px-4 py-2 bg-green-500 text-white hover:bg-green-600 shadow-md shadow-green-200 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all">
+                          ✅ Entregar
                       </button>
                   `
                     : ""
                 }
-                    ${
-                      p.status !== "CANCELADO"
-                        ? `
+
+                ${
+                  // O botão de cancelar continua aqui, mas não aparece se já foi entregue
+                  p.status !== "CANCELADO" &&
+                  p.status !== "FINALIZADO" &&
+                  p.status !== "RETIRADO"
+                    ? `
                       <button onclick="alterarStatus('${p.id}', 'CANCELAR')" 
-                              class="px-4 py-2 bg-red-50 text-red-600 rounded-xl font-bold hover:bg-red-100 transition-all">
+                              class="px-4 py-2 bg-white text-red-500 border border-red-200 hover:bg-red-50 rounded-xl font-bold text-[10px] uppercase tracking-widest transition-all">
                           ✕ Cancelar
                       </button>
                   `
-                        : ""
-                    }
+                    : ""
+                }
             </td>
         </tr>
-    `,
-    )
+      `;
+    })
     .join("");
 }
 
-function getStatusColor(status) {
-  const cores = {
-    PENDENTE: "text-amber-500",
-    PRODUCAO: "text-blue-500",
-    FINALIZADO: "text-green-500",
-    RETIRADO: "text-slate-400",
-    CANCELADO: "text-red-500",
-  };
-  return cores[status] || "text-slate-800";
-}
-
+// ==========================================
 // FUNÇÕES DE IMPRESSÃO
+// ==========================================
+
 function reimprimirCaixa(id) {
   const p = pedidosData.find((x) => x.id === id);
   if (!p) return;
 
-  // 1. Visibilidade
   const cli = document.getElementById("cupom-cliente");
   const conf = document.getElementById("cupom-conferencia");
   conf.classList.add("hidden");
   cli.classList.remove("hidden");
 
-  // 2. Preenchimento de Dados (Sincronizado com o que a API do Atendimento envia)
   document.getElementById("cli-senha").innerText = p.senha;
-
-  // IMPORTANTE: Se p.criado_em estiver vazio, usa a hora atual como fallback (igual no seu Caixa)
   document.getElementById("cli-data").innerText =
     p.criado_em || new Date().toLocaleTimeString();
-
   document.getElementById("cli-tipo").innerText = p.tipo || "NORMAL";
   document.getElementById("cli-total").innerText =
     `R$ ${parseFloat(p.total).toFixed(2)}`;
 
-  // 3. Itens (Formato de tabela <tr><td>)
   const corpoItens = document.getElementById("cli-itens-corpo");
   corpoItens.innerHTML = p.itens
     .map(
       (item) => `
         <tr>
-            <td class="py-1">${item.qtd}x ${item.nome}</td>
-            <td class="text-right">R$ ${parseFloat(item.subtotal).toFixed(2)}</td>
+            <td class="py-1 uppercase text-sm">${item.qtd}x ${item.nome}</td>
+            <td class="text-right py-1 text-sm">R$ ${parseFloat(item.subtotal).toFixed(2)}</td>
         </tr>
     `,
     )
     .join("");
 
-  // 4. Impressão
   setTimeout(() => {
     window.print();
     cli.classList.add("hidden");
@@ -147,45 +157,27 @@ function limparCuponsImpressao() {
   cupomConf?.classList.add("hidden");
 }
 
-function formatarHoraAtualImpressao() {
-  return new Date().toLocaleTimeString("pt-BR", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-}
-
 function prepararCupomConferencia(p) {
   const cupomCli = document.getElementById("cupom-cliente");
   const cupomConf = document.getElementById("cupom-conferencia");
   const confSenha = document.getElementById("conf-senha");
   const confItens = document.getElementById("conf-itens");
-  const confSaidaHora = document.getElementById("conf-saida-hora");
 
-  if (!cupomCli || !cupomConf || !confSenha || !confItens || !confSaidaHora) {
-    console.error("ERRO: Estrutura do cupom de 58mm não encontrada!");
-    return false;
-  }
+  if (!cupomCli || !cupomConf || !confSenha || !confItens) return false;
 
-  // 1. PROTOCOLO DE VISIBILIDADE:
-  // Esconde o de 80mm e libera o de 58mm para o motor de impressão
   cupomCli.classList.add("hidden");
   cupomConf.classList.remove("hidden");
-
-  // 2. PREENCHIMENTO DOS DADOS
   confSenha.innerText = p.senha;
-  confSaidaHora.innerText = formatarHoraAtualImpressao();
 
   const listaItens = p.itens || p.itens_resumo || [];
   const itensHTML = listaItens
     .map((i) => {
       const quantidade = i.qtd || i.quantidade || 1;
       const nome = i.nome || i.prato_nome || "Item";
-
       return `
-      <div style="display: flex; align-items: flex-start; border-bottom: 1px solid #000; padding: 6px 0;">
+      <div style="display: flex; align-items: flex-start; border-bottom: 1px dashed #000; padding: 8px 0;">
         <span style="margin-right: 8px; font-size: 20px;">[ ]</span>
-        <span style="flex: 1; font-size: 18px; font-weight: bold;">${quantidade}x ${nome}</span>
+        <span style="flex: 1; font-size: 16px; font-weight: bold; text-transform: uppercase;">${quantidade}x ${nome}</span>
       </div>`;
     })
     .join("");
@@ -194,77 +186,44 @@ function prepararCupomConferencia(p) {
   return true;
 }
 
-async function marcarPedidoComoImpresso(pedidoId) {
-  if (!pedidoId) return;
-
-  try {
-    await fetch(`/api/v1/monitor/pedidos/${pedidoId}/impresso/`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-CSRFToken": getCsrfToken(),
-      },
-    });
-  } catch (e) {
-    console.error("Erro ao confirmar impressão automática:", e);
-  }
-}
-
-async function finalizarImpressaoAutomatica() {
+function finalizarImpressaoAutomatica() {
   if (!impressaoAutomaticaEmAndamento) return;
-
-  const pedidoFinalizado = pedidoImpressaoAtual;
-
   if (fallbackFimImpressao) {
     clearTimeout(fallbackFimImpressao);
     fallbackFimImpressao = null;
   }
-
   limparCuponsImpressao();
   impressaoAutomaticaEmAndamento = false;
-  pedidoImpressaoAtual = null;
-  await marcarPedidoComoImpresso(pedidoFinalizado?.id);
-  if (pedidoFinalizado?.id) {
-    pedidosProntosNaFila.delete(pedidoFinalizado.id);
-  }
   processarFilaImpressaoAutomatica();
 }
 
 function processarFilaImpressaoAutomatica() {
-  if (impressaoAutomaticaEmAndamento || filaImpressaoAutomatica.length === 0) {
+  if (impressaoAutomaticaEmAndamento || filaImpressaoAutomatica.length === 0)
     return;
-  }
 
   const proximoPedido = filaImpressaoAutomatica.shift();
   if (!proximoPedido) return;
 
+  pedidosProntosNaFila.delete(proximoPedido.senha);
+
   const prontoParaImprimir = prepararCupomConferencia(proximoPedido);
   if (!prontoParaImprimir) {
-    if (proximoPedido.id) {
-      pedidosProntosNaFila.delete(proximoPedido.id);
-    }
     processarFilaImpressaoAutomatica();
     return;
   }
 
   impressaoAutomaticaEmAndamento = true;
-  pedidoImpressaoAtual = proximoPedido;
 
-  // 3. DISPARO DA IMPRESSÃO
   setTimeout(() => {
     window.print();
-    // Fallback de segurança caso o browser não dispare `afterprint`.
     fallbackFimImpressao = setTimeout(finalizarImpressaoAutomatica, 60000);
   }, 300);
 }
 
 function enfileirarImpressaoAutomatica(p) {
-  if (!p?.id || pedidosProntosNaFila.has(p.id)) {
-    return;
-  }
-
+  if (!p?.senha || pedidosProntosNaFila.has(p.senha)) return;
   filaImpressaoAutomatica.push(p);
-  pedidosProntosNaFila.add(p.id);
+  pedidosProntosNaFila.add(p.senha);
   processarFilaImpressaoAutomatica();
 }
 
@@ -275,14 +234,23 @@ function reimprimirConferencia(id) {
   const prontoParaImprimir = prepararCupomConferencia(p);
   if (!prontoParaImprimir) return;
 
-  // 4. Imprime
   setTimeout(() => {
     window.print();
     limparCuponsImpressao();
   }, 250);
 }
 
+// ==========================================
+// AÇÕES DO SISTEMA (CANCELAMENTO E TOKENS)
+// ==========================================
+
 async function alterarStatus(id, acao) {
+  if (
+    acao === "CANCELAR" &&
+    !confirm("Tem certeza que deseja cancelar o pedido?")
+  )
+    return;
+
   const url = `/api/v1/atendimento/lista/${id}/`;
 
   try {
@@ -296,13 +264,9 @@ async function alterarStatus(id, acao) {
     });
 
     if (response.ok) {
-      const dados = await response.json();
-      console.log("Pedido enviado para produção:", dados);
-
-      // Opcional: Se quiser imprimir o ticket de cozinha automaticamente ao clicar:
-      // if (acao === 'PRODUCAO') imprimirTicketCozinha(dados);
-
-      await carregarAtendimento(); // Atualiza a tabela para sumir o botão ou mudar o status
+      await carregarAtendimento();
+    } else {
+      alert("Falha ao processar ação.");
     }
   } catch (e) {
     console.error("Erro ao processar ação:", e);
@@ -310,7 +274,6 @@ async function alterarStatus(id, acao) {
 }
 
 function getCsrfToken() {
-  // Busca o token que o Django coloca no Cookie
   let cookieValue = null;
   if (document.cookie && document.cookie !== "") {
     const cookies = document.cookie.split(";");
@@ -325,45 +288,83 @@ function getCsrfToken() {
   return cookieValue;
 }
 
-async function monitorarPedidosParaImpressao() {
-  if (monitorandoImpressao || document.hidden) return;
+// ==========================================
+// AUTO-IMPRESSÃO DE COZINHA (FILA BACKGROUND)
+// ==========================================
 
+async function monitorarPedidosParaImpressao() {
   try {
-    monitorandoImpressao = true;
-    const res = await fetch("/api/v1/monitor/pedidos-prontos-impressao/");
+    const res = await fetch("/api/v1/monitor/pedidos/");
     if (!res.ok) return;
     const data = await res.json();
 
-    data.forEach((p) => {
-      console.log(`Pedido pronto pendente de impressão: #${p.senha}`);
+    if (!primeiraCargaImpressao) {
+      data.prontos.forEach((p) => pedidosProntosConhecidos.add(p.senha));
+      primeiraCargaImpressao = true;
+      return;
+    }
 
-      enfileirarImpressaoAutomatica(p);
+    data.prontos.forEach((p) => {
+      if (!pedidosProntosConhecidos.has(p.senha)) {
+        console.log(`Imprimindo automaticamente pedido pronto: #${p.senha}`);
+        enfileirarImpressaoAutomatica(p);
+        pedidosProntosConhecidos.add(p.senha);
+        carregarAtendimento();
+      }
     });
   } catch (e) {
     console.error("Erro no monitor de auto-impressão:", e);
-  } finally {
-    monitorandoImpressao = false;
+  }
+}
+
+// Adicione junto com as outras funções de ação (perto do alterarStatus)
+async function retirarPedido(id) {
+  // 🔴 ATENÇÃO: Confirme se esta URL é EXATAMENTE a mesma do seu urls.py
+  const url = `/api/v1/pedidos/retirar/${id}/`;
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRFToken": getCsrfToken(),
+      },
+    });
+
+    if (response.ok) {
+      await carregarAtendimento();
+    } else {
+      // Escudo: Verifica se o Django mandou JSON ou uma página de Erro (HTML)
+      const isJson = response.headers
+        .get("content-type")
+        ?.includes("application/json");
+
+      if (isJson) {
+        const data = await response.json();
+        alert(
+          `Falha ao dar baixa: ${data.detail || data.error || "Erro desconhecido."}`,
+        );
+      } else {
+        const textoErro = await response.text();
+        console.error(`Erro ${response.status} do Servidor:`, textoErro);
+        alert(
+          `Erro ${response.status}: Verifique o console do navegador e o terminal do VS Code.`,
+        );
+      }
+    }
+  } catch (e) {
+    console.error("Erro crítico na requisição de retirada:", e);
+    alert("Erro de comunicação com o servidor. A API pode estar fora do ar.");
   }
 }
 
 window.addEventListener("afterprint", finalizarImpressaoAutomatica);
 
-// Inicia o monitoramento
-document.addEventListener("DOMContentLoaded", monitorarPedidosParaImpressao);
-setInterval(monitorarPedidosParaImpressao, 5000);
-
-// Eventos de Busca
+setInterval(monitorarPedidosParaImpressao, 7000);
 document
   .getElementById("input-busca")
-  ?.addEventListener("input", carregarAtendimento);
+  ?.addEventListener("input", renderizarTabela);
 document
   .getElementById("filtro-status")
   ?.addEventListener("change", carregarAtendimento);
-setInterval(carregarAtendimento, 12000);
-
-document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) {
-    carregarAtendimento();
-    monitorarPedidosParaImpressao();
-  }
-});
+setInterval(carregarAtendimento, 5000);

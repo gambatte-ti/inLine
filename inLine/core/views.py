@@ -1,4 +1,5 @@
 
+import uuid
 from django.db.models import Count, Avg, F, ExpressionWrapper, fields, Q
 from django.shortcuts import render, get_object_or_404
 from django.core.exceptions import ValidationError
@@ -12,23 +13,26 @@ from django.utils import timezone
 from decimal import Decimal
 from django.db.models import F, Count, Q
 from django.views.generic import ListView
+from datetime import timedelta
+from rest_framework.permissions import IsAuthenticated
 
 from .services import (
     create_order,
     finalize_prato,
-     calculate_tma_per_prato,
-     claim_ready_orders_for_print,
-     registrar_retirada_total_pedido,
-     mark_ready_order_as_printed,
-     release_order_to_production,
+    calculate_tma_per_prato,
+    iniciar_producao_item,
+    registrar_retirada_total_pedido,
 )
 from .models import Pedido, FilaPrato, Prato, TMA
+# =========================
+# CRIAR PRATO
+# =========================
 
 class CreatePratoAPIView(APIView):
     def post(self, request):
         nome = request.data.get("nome")
         preco = request.data.get("preco")
-        estoque=request.data.get("estoque")
+        estoque = request.data.get("estoque")
 
         if not nome or not preco:
             return Response({"error": "Nome e preço são obrigatórios"}, status=400)
@@ -50,112 +54,36 @@ class CreatePratoAPIView(APIView):
 
 # views.py
 class CreateOrderAPIView(APIView):
+    # ADICIONE ESTAS DUAS LINHAS PARA RESOLVER O ERRO 403:
+    authentication_classes = []
+    permission_classes = []
+
     def post(self, request):
         tipo = request.data.get("tipo")
         itens = request.data.get("itens", [])
         
+        # A API recebe o texto que o JavaScript enviou (o número do terminal)
+        terminal_caixa = request.data.get("caixa", "Não Identificado")
+        
         try:
-            # A execução atômica deve estar dentro do create_order
-            pedido = create_order(tipo=tipo, itens=itens)
+            # Envia o texto para o service
+            pedido = create_order(tipo=tipo, itens=itens, caixa=terminal_caixa)
             
             host = request.get_host() 
             status_url = f"http://{host}/acompanhamento/{str(pedido.id)}/"
             
             return Response({
                 "id": str(pedido.id),
-                "senha": str(pedido.id)[:4].upper(),
+                "senha": str(pedido.senha_numero),
                 "tipo": pedido.tipo,
                 "total": float(pedido.total),
-                "criado_em": timezone.localtime(pedido.created_at).strftime("%H:%M:%S"),
-                "status_url": status_url,
-                "itens": [
-                    {
-                        "prato": item.prato.nome, 
-                        "preco": float(item.preco_unitario)
-                    } for item in pedido.filas.all()
-                ]
+                "status_url": status_url
             }, status=status.HTTP_201_CREATED)
 
         except ValueError as e:
-            print(f"ERRO DE ESTOQUE DISPARADO: {str(e)}") # Isso aparece no terminal do Codespaces
             return Response({"error": str(e)}, status=400)
         except Exception as e:
-            return Response({"error": "Erro interno ao processar pedido."}, status=500)
-        
-# =========================
-# PRÓXIMO PEDIDO (CAIXA / FILA LÓGICA)
-# =========================
-
-# class NextOrderAPIView(APIView):
-#     def get(self, request):
-#         """Lista pedidos pendentes respeitando a prioridade de festival"""
-#         try:
-#             # Ordenação prioritária: Preferencial primeiro, depois os mais antigos
-#             pedidos = Pedido.objects.filter(
-#                 status=Pedido.Status.PENDENTE
-#             ).order_by(
-#                 models.Case(
-#                     models.When(tipo=Pedido.Tipo.PREFERENCIAL, then=models.Value(0)),
-#                     default=models.Value(1)
-#                 ),
-#                 "created_at"
-#             )[:10]
-
-#             data = []
-#             for p in pedidos:
-#                 data.append({
-#                     "pedido_id": str(p.id), # O JS espera 'pedido_id'
-#                     "tipo": p.tipo,
-#                     "criado_em": p.created_at.strftime("%H:%M")
-#                 })
-            
-#             if not data:
-#                 return Response(status=status.HTTP_204_NO_CONTENT)
-                
-#             return Response(data, status=status.HTTP_200_OK)
-#         except Exception as e:
-#             return Response({"error": str(e)}, status=500)
-
-#     @transaction.atomic
-#     def post(self, request):
-#         pedido = Pedido.objects.filter(
-#             status=Pedido.Status.PENDENTE
-#         ).order_by(
-#             models.Case(
-#                 models.When(tipo=Pedido.Tipo.PREFERENCIAL, then=models.Value(0)),
-#                 default=models.Value(1)
-#             ),
-#             "created_at"
-#         ).select_for_update().first()
-
-#         if not pedido:
-#             return Response(status=status.HTTP_204_NO_CONTENT)
-
-#         # 1. Geramos a senha a partir dos primeiros 4 dígitos do UUID (em maiúsculo)
-#         senha_gerada = str(pedido.id).split('-')[0][:4].upper()
-
-#         # 2. Buscamos os itens na FilaPrato
-#         itens_qs = FilaPrato.objects.filter(pedido=pedido).values('prato__nome').annotate(
-#             qtd=models.Count('id')
-#         )
-        
-#         itens_formatados = [
-#             {"nome": item['prato__nome'], "quantidade": item['qtd']} 
-#             for item in itens_qs
-#         ]
-
-#         pedido.status = Pedido.Status.PRODUCAO
-#         pedido.save(update_fields=['status'])
-
-#         return Response({
-#             "pedido_id": str(pedido.id),
-#             "senha": senha_gerada,  # Enviamos a senha pronta para o JS
-#             "tipo": pedido.tipo,
-#             "itens": itens_formatados,
-#             "total_itens": sum(item['qtd'] for item in itens_qs),
-#             "hora_impressao": timezone.now().strftime("%H:%M")
-#         }, status=status.HTTP_200_OK)
-
+            return Response({"error": "Erro interno ao processar pedido."}, status=500)       
 # =========================
 # LISTA DE PEDIDOS (CAIXA / FILA LÓGICA)
 # =========================
@@ -163,7 +91,7 @@ class CreateOrderAPIView(APIView):
 # views.py
 class AtendimentoListaAPIView(APIView):
     def get(self, request, pedido_id=None):
-        hoje = timezone.localtime(timezone.now()).date()
+        hoje = timezone.now().date()
         
         queryset = Pedido.objects.filter(
             created_at__date=hoje
@@ -185,19 +113,16 @@ class AtendimentoListaAPIView(APIView):
 
         data = []
         for p in queryset:
-            # AGRUPAMENTO: Agrupa itens iguais e conta a quantidade
             itens_agrupados = p.filas.values(
-                'prato__nome', 
-                'preco_unitario'
-            ).annotate(
-                quantidade=Count('id')
-            )
+                'prato__nome', 'preco_unitario'
+            ).annotate(quantidade=Count('id'))
 
             data.append({
                 "id": str(p.id),
-                "senha": str(p.id).split('-')[0][:4].upper(),
+                "senha": str(p.senha_numero),
                 "tipo": p.tipo,
                 "status": p.status,
+                "caixa": p.caixa,
                 "total": float(p.total),
                 "criado_em": timezone.localtime(p.created_at).strftime("%H:%M"),
                 "itens": [
@@ -210,24 +135,20 @@ class AtendimentoListaAPIView(APIView):
                 ]
             })
         return Response(data)
+
     @transaction.atomic
     def post(self, request, pedido_id):
+        # O Atendimento não envia mais para produção! Serve apenas para cancelamento manual.
         acao = request.data.get("acao")
-        # Busca o pedido com trava de linha (select_for_update)
         pedido = get_object_or_404(Pedido.objects.select_for_update(), id=pedido_id)
 
-        if acao == "PRODUCAO":
-            release_order_to_production(pedido)
-
-            return Response({"status": "sucesso", "msg": "Pedido enviado para a cozinha"})
-
-        elif acao == "CANCELAR":
-            pedido.status = "CANCELADO"
+        if acao == "CANCELAR":
+            pedido.status = Pedido.Status.CANCELADO
             pedido.save(update_fields=['status'])
-            pedido.filas.all().update(status="CANCELADO")
-            return Response({"status": "sucesso"})
+            pedido.filas.all().update(status=FilaPrato.Status.CANCELADO)
+            return Response({"status": "sucesso", "msg": "Pedido cancelado com sucesso."})
 
-        return Response({"error": "Ação inválida"}, status=400)
+        return Response({"error": "Ação inválida para este fluxo"}, status=400)
 # =========================
 # PAINEL DA COZINHA POR PRATO
 # =========================
@@ -236,17 +157,16 @@ class AtendimentoListaAPIView(APIView):
 class PainelCozinhaPratoView(APIView):
     def get(self, request, prato_id=None):
         try:
-            # A MUDANÇA: Filtramos FilaPrato onde o PEDIDO está em PRODUCAO
-            # E o item em si ainda está PENDENTE na cozinha.
+            # AJUSTE: Permite ver pedidos PENDENTES e em PRODUCAO
             queryset = FilaPrato.objects.filter(
-                pedido__status=Pedido.Status.PRODUCAO, # Liberado pelo atendimento
-                status=FilaPrato.Status.PENDENTE       # Ainda não feito pela cozinha
+                pedido__status__in=[Pedido.Status.PENDENTE, Pedido.Status.PRODUCAO], 
+                status__in=[FilaPrato.Status.PENDENTE, FilaPrato.Status.EM_PRODUCAO]
             ).select_related('pedido', 'prato').order_by(
                 models.Case(
                     models.When(pedido__tipo='PREFERENCIAL', then=models.Value(0)),
                     default=models.Value(1)
                 ),
-                models.functions.Coalesce('released_to_production_at', 'created_at')
+                'created_at'
             )
 
             if prato_id:
@@ -255,29 +175,44 @@ class PainelCozinhaPratoView(APIView):
             data = []
             agora = timezone.now()
             for fp in queryset:
-                base_espera = fp.released_to_production_at or fp.created_at
                 data.append({
                     "fila_id": str(fp.id),
                     "pedido_id": str(fp.pedido.id),
+                    "senha": str(fp.pedido.senha_numero),
                     "prato_nome": fp.prato.nome,
                     "tipo": fp.pedido.tipo,
-                    "tempo_espera": int((agora - base_espera).total_seconds() / 60)
+                    "status_item": fp.status, # PENDENTE ou EM_PRODUCAO
+                    "tempo_espera": int((agora - fp.created_at).total_seconds() / 60)
                 })
             
             return Response({"pendentes": data}, status=200)
         except Exception as e:
             return Response({"pendentes": [], "error": str(e)}, status=500)
+
+# =========================
+# AÇÃO 1: COLOCAR EM PRODUÇÃO
+# =========================
+class IniciarPratoView(APIView):
+    def post(self, request, id):
+        try:
+            fila = iniciar_producao_item(id)
+            return Response({
+                "status": "EM_PRODUCAO",
+                "fila_id": str(id),
+                "mensagem": "Item entrou em preparação."
+            }, status=status.HTTP_200_OK)
+        except Exception as e:
+            print(f"--- ERRO CRÍTICO NO INICIAR_PRATO: {e} ---")
+            return Response({"error": str(e)}, status=500)
+
+
 # =========================
 # FINALIZAR ITEM DE PRODUÇÃO
 # =========================
 
-# core/views.py
-
-
 class FinalizarPratoView(APIView):
     def post(self, request, id): 
         try:
-            # 1. Executa a lógica de finalização do prato/pedido
             fila = finalize_prato(id) 
             
             if not fila:
@@ -286,25 +221,19 @@ class FinalizarPratoView(APIView):
                     status=status.HTTP_404_NOT_FOUND
                 )
 
-            # 2. GATILHO DE MÉTRICAS (Solução do Dashboard)
-            # Sempre que finalizamos um item, tentamos processar o TMA pendente.
-            # A função interna já possui a trava de "mínimo 10 itens", 
-            # então ela não pesará no banco se não houver dados suficientes.
             try:
                 calculate_tma_per_prato()
             except Exception as tma_err:
-                # Logamos o erro de métrica mas não travamos a resposta do usuário
                 print(f"Aviso: Falha ao calcular TMA: {tma_err}")
 
             return Response({
-                "status": "Finalizado", 
+                "status": "FINALIZADO", 
                 "fila_id": str(id),
-                "mensagem": "Métricas atualizadas com sucesso"
+                "mensagem": "Item finalizado e métricas processadas."
             }, status=status.HTTP_200_OK)
             
         except Exception as e:
-            print(f"ERRO CRÍTICO NO FINALIZAR: {e}")
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({"error": str(e)}, status=500)
 
     
 # AUXILIAR: Listagem de Pratos para o Terminal de Caixa
@@ -361,7 +290,7 @@ class AcompanhamentoPedidoView(View):
 # Painel central
 class DashboardView(View):
     def get(self, request):
-        hoje = timezone.localdate()
+        hoje = timezone.now().date()
         total_geral = FilaPrato.objects.filter(created_at__date=hoje).count()
 
         # Busca pratos e anota as contagens básicas
@@ -414,8 +343,8 @@ class MonitorPedidosAPIView(APIView):
             data = {"pendentes": [], "preparando": [], "prontos": []}
 
             for p in pedidos:
-                senha = str(p.id).split('-')[0][:4].upper() if p.id else "0000"
-                item = {"id": str(p.id), "senha": senha, "tipo": p.tipo}
+                senha = str(p.senha_numero) if p.senha_numero else "0000"
+                item = {"senha": senha, "tipo": p.tipo}
                 
                 if p.status == Pedido.Status.PENDENTE:
                     data["pendentes"].append(item)
@@ -442,37 +371,6 @@ class MonitorPedidosAPIView(APIView):
             # Verifique o log do seu terminal para ler o que aparecer aqui!
             print(f"--- ERRO NA API DO MONITOR: {e} ---")
             return Response({"error": str(e)}, status=500)
-
-
-class PedidosProntosPendentesImpressaoAPIView(APIView):
-    def get(self, request):
-        pedidos = claim_ready_orders_for_print()
-        data = []
-        for pedido in pedidos:
-            itens_agrupados = pedido.filas.values("prato__nome").annotate(total=Count("id"))
-            data.append(
-                {
-                    "id": str(pedido.id),
-                    "senha": str(pedido.id).split("-")[0][:4].upper(),
-                    "tipo": pedido.tipo,
-                    "itens": [
-                        {"nome": item["prato__nome"], "quantidade": item["total"]}
-                        for item in itens_agrupados
-                    ],
-                }
-            )
-
-        return Response(data, status=200)
-
-
-class MarcarPedidoProntoImpressoAPIView(APIView):
-    def post(self, request, pedido_id):
-        pedido = mark_ready_order_as_printed(pedido_id)
-
-        if not pedido:
-            return Response({"detail": "Pedido não encontrado."}, status=404)
-
-        return Response({"status": "sucesso"}, status=200)
 
 #ALTERAR STATUS PARA RETIRADO DO PEDIDO
 class RetirarPedidoView(APIView):
@@ -567,16 +465,17 @@ class UpdatePratoAPIView(APIView):
 class PainelQuantitativoProducaoAPIView(APIView):
     def get(self, request):
         try:
-            # Agrupa por prato e conta quantos itens PENDENTES existem 
-            # para pedidos que o atendimento já liberou (PRODUCAO)
-            producao_qs = FilaPrato.objects.filter(
-                pedido__status=Pedido.Status.PRODUCAO,
-                status=FilaPrato.Status.PENDENTE
+            # Usamos FilaPrato como base, mas agrupamos pelo Prato
+            dados = FilaPrato.objects.filter(
+                pedido__status__in=[Pedido.Status.PENDENTE, Pedido.Status.PRODUCAO]
             ).values('prato__nome', 'prato__estoque').annotate(
-                total_produzir=Count('id')
-            ).order_by('-total_produzir')
+                # Conta apenas os PENDENTES (Espera)
+                espera=Count('id', filter=Q(status=FilaPrato.Status.PENDENTE)),
+                # Conta apenas os EM_PRODUCAO (Chapa)
+                producao=Count('id', filter=Q(status=FilaPrato.Status.EM_PRODUCAO))
+            ).order_by('-producao', '-espera')
 
-            return Response(producao_qs, status=200)
+            return Response(dados, status=200)
         except Exception as e:
             return Response({"error": str(e)}, status=500)
 
@@ -587,19 +486,75 @@ class PainelPorPratoView(TemplateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        nome_prato = self.kwargs.get('nome_prato')
+        prato_id_str = self.kwargs.get('id')
         
-        # Busca o objeto prato para pegar o estoque
-        prato = Prato.objects.filter(nome__iexact=nome_prato).first()
-        
-        # Conta quantos itens estão na fila (Produção)
-        qtd_producao = FilaPrato.objects.filter(
-            prato__nome__iexact=nome_prato,
-            pedido__status=Pedido.Status.PRODUCAO, 
-            status=FilaPrato.Status.PENDENTE
-        ).count()
+        try:
+            # 1. Converte a string contínua da URL para o formato UUID do banco
+            prato_uuid = uuid.UUID(str(prato_id_str))
+            prato = Prato.objects.filter(id=prato_uuid).first()
+            
+            # 2. Conta apenas os itens que estão na chapa (Status EM_PRODUCAO)
+            qtd_producao = FilaPrato.objects.filter(
+                prato_id=prato_uuid,
+                status=FilaPrato.Status.EM_PRODUCAO
+            ).count()
 
-        context['nome_prato'] = nome_prato
-        context['qtd_producao'] = qtd_producao
-        context['qtd_estoque'] = prato.estoque if prato else 0
+            # 3. Conta apenas os itens em espera (Status PENDENTE)
+            # Adicionamos o filtro no pedido pai para garantir que só contamos itens de pedidos ativos
+            qtd_pendente = FilaPrato.objects.filter(
+                prato_id=prato_uuid,
+                status=FilaPrato.Status.PENDENTE,
+                pedido__status__in=[Pedido.Status.PENDENTE, Pedido.Status.PRODUCAO]
+            ).count()
+
+            # 4. Alimenta as variáveis que o HTML está esperando
+            context['prato_id'] = str(prato_uuid)
+            context['nome_prato'] = prato.nome if prato else "Prato não encontrado"
+            context['qtd_producao'] = qtd_producao
+            context['qtd_pendente'] = qtd_pendente
+            context['qtd_estoque'] = prato.estoque if prato else 0
+            
+        except (ValueError, TypeError):
+            # Fallback de segurança para URLs corrompidas
+            context['prato_id'] = None
+            context['nome_prato'] = "Prato/ID Inválido"
+            context['qtd_producao'] = 0
+            context['qtd_pendente'] = 0
+            context['qtd_estoque'] = 0
+            
+        return context
+
+# MONITOR DE ULTIMA SENHA CHAMADA
+class ExpedicaoPedidosAPIView(APIView):
+    def get(self, request):
+        try:
+            # Filtra pedidos finalizados nos últimos 5 minutos
+            cinco_minutos_atras = timezone.now() - timedelta(minutes=5)
+            
+            pedidos_prontos = Pedido.objects.filter(
+                status=Pedido.Status.FINALIZADO,
+                updated_at__gte=cinco_minutos_atras  # <--- ESSA É A CHAVE
+            ).order_by('-updated_at') # Ordena pelo mais recente
+            
+            data = {"prontos": []}
+            
+            for p in pedidos_prontos:
+                # ... (resto do seu loop permanece igual)
+                data["prontos"].append({
+                    "id": str(p.id),
+                    "senha": str(p.senha_numero),
+                    # ...
+                })
+                
+            return Response(data, status=200)
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)
+        
+class ExpedicaoPainelView(TemplateView):
+    template_name = 'expedicao.html'
+    
+    # Opcional: Adicione contextos iniciais se precisar
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['title'] = "Painel de Expedição"
         return context

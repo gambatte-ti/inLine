@@ -2,7 +2,6 @@ let carrinho = {};
 let modoEdicao = false;
 let pratosCache = [];
 let processandoPedido = false;
-let carregandoMenu = false;
 
 // Função para obter o CSRF Token do elemento HTML
 function getCsrfToken() {
@@ -10,10 +9,7 @@ function getCsrfToken() {
 }
 
 async function carregarMenu() {
-  if (carregandoMenu) return;
-
   try {
-    carregandoMenu = true;
     const res = await fetch("/api/v1/pratos/");
     pratosCache = await res.json();
     const grid = document.getElementById("grid-produtos");
@@ -48,8 +44,6 @@ async function carregarMenu() {
       .join("");
   } catch (e) {
     console.error("Erro ao carregar menu:", e);
-  } finally {
-    carregandoMenu = false;
   }
 }
 
@@ -179,8 +173,7 @@ async function finalizarPedido(tipo) {
       alert("❌ Erro: " + (dados.error || "Falha no servidor."));
       await carregarMenu();
     }
-  } 
-  catch (e) {
+  } catch (e) {
     console.error(e);
     alert("Erro crítico de conexão.");
   } finally {
@@ -188,63 +181,4 @@ async function finalizarPedido(tipo) {
   }
 }
 
-// Funções de Modal e Utilitários (Exatamente como as suas)
-function toggleModoEdicao() {
-  modoEdicao = !modoEdicao;
-  const btn = document.getElementById("btn-modo-edicao");
-  btn.classList.toggle("bg-amber-100");
-  btn.classList.toggle("text-amber-700");
-  btn.innerText = modoEdicao ? "Sair da Edição" : "Editar Cardápio";
-  carregarMenu();
-}
-
-function abrirModalEdicao(id, nome, preco, estoque) {
-  document.getElementById("edit-id").value = id;
-  document.getElementById("edit-nome").value = nome;
-  document.getElementById("edit-preco").value = preco;
-  document.getElementById("edit-estoque").value = estoque;
-  document.getElementById("modal-edicao").classList.remove("hidden");
-}
-
-function fecharModal() {
-  document.getElementById("modal-edicao").classList.add("hidden");
-}
-
-async function salvarEdicao() {
-  const id = document.getElementById("edit-id").value;
-  const dados = {
-    nome: document.getElementById("edit-nome").value,
-    preco: document.getElementById("edit-preco").value,
-    estoque: document.getElementById("edit-estoque").value,
-  };
-  try {
-    const res = await fetch(`/api/v1/pratos/editar/${id}/`, {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-        "X-CSRFToken": getCsrfToken(),
-      },
-      body: JSON.stringify(dados),
-    });
-    if (res.ok) {
-      fecharModal();
-      carregarMenu();
-    }
-  } catch (e) {
-    console.error(e);
-  }
-}
-
 window.onload = carregarMenu;
-
-document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) {
-    carregarMenu();
-  }
-});
-
-setInterval(() => {
-  if (!document.hidden && !processandoPedido && !modoEdicao) {
-    carregarMenu();
-  }
-}, 20000);
