@@ -338,21 +338,21 @@ class MonitorPedidosAPIView(APIView):
         try:
             # Usamos created_at se o updated_at ainda der erro de coluna não encontrada
             pedidos = Pedido.objects.filter(
-                status__in=[Pedido.Status.PENDENTE, Pedido.Status.PRODUCAO, Pedido.Status.FINALIZADO]
+                status__in=[Pedido.Status.PENDENTE, Pedido.Status.PRODUCAO, Pedido.Status.FINALIZADO, Pedido.Status.RECHAMADO]
             ).order_by('-created_at')
 
-            data = {"pendentes": [], "preparando": [], "prontos": []}
+            data = {"pendentes": [], "preparando": [], "prontos": [], "chamados": []}
 
             for p in pedidos:
                 senha = str(p.senha_numero) if p.senha_numero else "0000"
-                item = {"senha": senha, "tipo": p.tipo}
+                item = {"senha": senha, "tipo": p.tipo, "updated_at": p.updated_at.isoformat() if p.updated_at else None}
                 
                 if p.status == Pedido.Status.PENDENTE:
                     data["pendentes"].append(item)
                 elif p.status == Pedido.Status.PRODUCAO:
                     data["preparando"].append(item)
-                elif p.status == Pedido.Status.FINALIZADO:
-                    # CORREÇÃO AQUI: 
+                elif p.status in [Pedido.Status.FINALIZADO, Pedido.Status.RECHAMADO]:
+                     # CORREÇÃO AQUI: 
                     # Certifique-se que o campo no modelo FilaPrato chama-se 'filas'
                     itens_agrupados = p.filas.values('prato__nome').annotate(
                         total=Count('id')
@@ -365,7 +365,11 @@ class MonitorPedidosAPIView(APIView):
                         } for i in itens_agrupados
                     ]
                     data["prontos"].append(item)
-
+                    data["chamados"].append(item)  # Adiciona também à lista de chamados
+                # elif p.status == Pedido.Status.RECHAMADO:
+                #     data["chamados"].append(item)
+                #     # data["prontos"] = sorted(data["prontos"], key=lambda x: x["updated_at"] or "", reverse=True)
+            data["chamados"] = sorted(data["chamados"], key=lambda x: x["updated_at"] or "", reverse=True)
             return Response(data)
         except Exception as e:
             # ESSA LINHA É A MAIS IMPORTANTE AGORA:
@@ -400,9 +404,9 @@ class BaixaEntregaView(View):
         # 3. Contamos apenas os itens que estão FINALIZADOS (total_prontos)
         pedidos_completos = Pedido.objects.annotate(
             total_itens=Count('filas'),
-            total_prontos=Count('filas', filter=Q(filas__status=Pedido.Status.FINALIZADO))
+            total_prontos=Count('filas', filter=Q(filas__status__in=[Pedido.Status.FINALIZADO, Pedido.Status.RECHAMADO]))
         ).filter(
-            status=Pedido.Status.FINALIZADO, # O status do pedido pai
+            status__in=[Pedido.Status.FINALIZADO, Pedido.Status.RECHAMADO], # O status do pedido pai
             total_itens=models.F('total_prontos'), # Regra: Total == Prontos
             total_itens__gt=0 # Garante que não pegamos pedidos vazios
         ).prefetch_related('filas', 'filas__prato').order_by('created_at')
@@ -527,14 +531,31 @@ class PainelPorPratoView(TemplateView):
 
 # MONITOR DE ULTIMA SENHA CHAMADA
 class ExpedicaoPedidosAPIView(APIView):
+    def patch(self, request):
+        try:
+            senha_numero = request.data.get("senha")
+            # Getting the last one, based in the assumption that the latest created_at is the most recent and It's possible to have multiple pedidos with the same senha_numero, so we take the last one.
+            pedido = Pedido.objects.filter(senha_numero=senha_numero).order_by('-created_at').last()
+            
+            if not pedido:
+                return Response({"error": "Pedido não encontrado."}, status=404)
+
+            # Atualiza o status para rechamado, que é o status que indica que o pedido foi chamado novamente para retirada.
+            pedido.status = Pedido.Status.RECHAMADO
+            pedido.updated_at = timezone.now()
+            pedido.save(update_fields=['status', 'updated_at'])
+
+            return Response({"status": "sucesso", "mensagem": "Pedido marcado como rechamado."}, status=200)
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)
     def get(self, request):
         try:
             # Filtra pedidos finalizados nos últimos 5 minutos
             cinco_minutos_atras = timezone.now() - timedelta(minutes=5)
             
             pedidos_prontos = Pedido.objects.filter(
-                status=Pedido.Status.FINALIZADO,
-                updated_at__gte=cinco_minutos_atras  # <--- ESSA É A CHAVE
+                status__in=[Pedido.Status.FINALIZADO, Pedido.Status.RECHAMADO],
+                updated_at__gte=cinco_minutos_atras
             ).order_by('-updated_at') # Ordena pelo mais recente
             
             data = {"prontos": []}
@@ -546,7 +567,6 @@ class ExpedicaoPedidosAPIView(APIView):
                     "senha": str(p.senha_numero),
                     # ...
                 })
-                
             return Response(data, status=200)
         except Exception as e:
             return Response({"error": str(e)}, status=500)
@@ -558,4 +578,12 @@ class ExpedicaoPainelView(TemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context['title'] = "Painel de Expedição"
+        return context
+    
+class AtendenteView(TemplateView):
+    template_name = 'atendimento_atendente.html'
+    
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['title'] = "Atendimento - Atendente"
         return context

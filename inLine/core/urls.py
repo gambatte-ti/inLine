@@ -1,7 +1,7 @@
 from django.urls import path
 from django.views.generic import TemplateView
 from .views import (
-    ListPratosAPIView, CreateOrderAPIView, 
+    AtendenteView, ListPratosAPIView, CreateOrderAPIView, 
     PainelCozinhaPratoView, 
     FinalizarPratoView,CreatePratoAPIView, TMADashboardAPIView,
     AcompanhamentoPedidoView,DashboardView, MonitorPedidosView, MonitorPedidosAPIView,
@@ -22,6 +22,7 @@ urlpatterns = [
     path('producao/painel/', TemplateView.as_view(template_name='painel_producao.html'), name='painel-producao'),
     path('producao/painel/<str:id>/', PainelPorPratoView.as_view(), name='painel-por-prato'),
     path('producao/expedicao/', ExpedicaoPainelView.as_view(), name='painel-expedicao'),
+    path('atendimento/atendente/', AtendenteView.as_view(template_name='atendimento_atendente.html'), name='atendente'),
 
     # API - O JavaScript deve usar esse prefixo
     path('api/v1/atendimento/lista/', AtendimentoListaAPIView.as_view(), name='atendimento-lista'),
@@ -38,5 +39,5 @@ urlpatterns = [
     path('api/v1/producao/quantitativo/', PainelQuantitativoProducaoAPIView.as_view()),
     path('api/v1/atendimento/lista/<uuid:pedido_id>/', AtendimentoListaAPIView.as_view(), name='atendimento-acao'),
     path('api/v1/fila/<str:id>/iniciar/', IniciarPratoView.as_view(), name='api-iniciar-prato'),
-    path('api/v1/monitor/pedidos/', ExpedicaoPedidosAPIView.as_view(), name='api-expedicao-monitor'),
+    path('api/v1/expedicao/pedidos/', ExpedicaoPedidosAPIView.as_view(), name='api-expedicao-monitor'),
 ] 

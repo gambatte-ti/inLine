@@ -18,6 +18,7 @@ class Pedido(models.Model):
         PENDENTE = "PENDENTE"
         PRODUCAO = "PRODUCAO"
         FINALIZADO = "FINALIZADO"
+        RECHAMADO = "RECHAMADO"
         RETIRADO = "RETIRADO"
         CANCELADO="CANCELADO"
 
