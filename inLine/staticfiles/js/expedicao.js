@@ -31,6 +31,8 @@ alert("O ARQUIVO FOI CARREGADO!");
 
       const data = await response.json();
 
+      console.log("Dados recebidos da API:", data); // Log para depuração
+
       if (data.prontos && data.prontos.length > 0) {
         const ultimoPedido = data.prontos[0];
 
@@ -50,4 +52,11 @@ alert("O ARQUIVO FOI CARREGADO!");
 
   // Executa a cada 3 segundos
   setInterval(verificarPedidosProntos, 3000);
+
+  // Recarrega a pagina automaticamente a cada 5 segundos com cache-buster
+  setInterval(() => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("_reload", Date.now().toString());
+    window.location.replace(url.toString());
+  }, 5000);
 })();
