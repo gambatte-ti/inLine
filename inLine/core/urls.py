@@ -20,7 +20,7 @@ urlpatterns = [
     path('monitor/', MonitorPedidosView.as_view(), name='monitor-cliente'),
     path('atendimento/baixa-entrega/', BaixaEntregaView.as_view(), name='gui-baixa-entrega'),
     path('producao/painel/', TemplateView.as_view(template_name='painel_producao.html'), name='painel-producao'),
-    path('producao/painel/<str:id>/', PainelPorPratoView.as_view(), name='painel-por-prato'),
+    path('producao/painel/<str:nome_pagina>/', PainelPorPratoView.as_view(), name='painel-por-prato'),
     path('producao/expedicao/', ExpedicaoPainelView.as_view(), name='painel-expedicao'),
     path('atendimento/atendente/', AtendenteView.as_view(template_name='atendimento_atendente.html'), name='atendente'),
 

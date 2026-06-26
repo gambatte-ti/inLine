@@ -56,6 +56,7 @@ class Prato(models.Model):
     preco = models.DecimalField(max_digits=10, decimal_places=2)
     ativo = models.BooleanField(default=True, db_index=True)
     estoque=models.IntegerField(default=100,null=False, blank=False)
+    nome_pagina = models.CharField(max_length=100, null=True, blank=True, help_text="Nome alternativo para exibição na página de produção")
 
     class Meta:
         indexes = [

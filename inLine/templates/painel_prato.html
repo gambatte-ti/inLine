@@ -1,60 +1,60 @@
 {% extends "base.html" %} {% block content %}
-<div class="min-h-screen bg-slate-900 text-white flex flex-col p-8">
-  <div class="border-b-4 border-amber-500 pb-6 mb-12">
+<div class="min-h-screen bg-slate-900 text-white flex flex-col p-2 md:p-8">
+  <div class="border-b-4 border-amber-500 pb-3 md:pb-6 mb-4 md:mb-12">
     <h1
-      class="text-6xl font-black uppercase italic tracking-tighter text-center"
+      class="text-4xl md:text-6xl font-black uppercase italic tracking-tighter text-center"
     >
       {{ nome_prato }}
     </h1>
   </div>
 
-  <div class="grid grid-cols-1 md:grid-cols-3 gap-8 flex-1">
+  <div class="grid grid-cols-3 gap-1 md:gap-8 flex-1">
     <div
-      class="bg-slate-800 rounded-[3rem] p-8 flex flex-col items-center justify-center border-b-8 border-slate-300 shadow-2xl"
+      class="bg-slate-800 rounded-lg md:rounded-[3rem] p-3 md:p-8 flex flex-col items-center justify-center border-b-4 md:border-b-8 border-slate-300 shadow-2xl"
     >
       <h2
-        class="text-3xl font-bold uppercase tracking-widest text-slate-400 mb-4 text-center"
+        class="text-sm md:text-3xl font-bold uppercase tracking-widest text-slate-400 mb-1 md:mb-4 text-center"
       >
         Aguardando
       </h2>
-      <div class="text-[10rem] font-black leading-none text-slate-200">
+      <div class="text-8xl md:text-[10rem] font-black leading-none text-slate-200">
         {{ qtd_pendente|default:"0" }}
       </div>
-      <p class="text-xl text-slate-500 mt-4 uppercase font-black">Na Fila</p>
+      <p class="text-sm md:text-xl text-slate-500 mt-1 md:mt-4 uppercase font-black">Na Fila</p>
     </div>
 
     <div
-      class="bg-slate-800 rounded-[3rem] p-8 flex flex-col items-center justify-center border-b-8 border-amber-500 shadow-2xl"
+      class="bg-slate-800 rounded-lg md:rounded-[3rem] p-3 md:p-8 flex flex-col items-center justify-center border-b-4 md:border-b-8 border-amber-500 shadow-2xl"
     >
       <h2
-        class="text-3xl font-bold uppercase tracking-widest text-slate-400 mb-4 text-center"
+        class="text-sm md:text-3xl font-bold uppercase tracking-widest text-slate-400 mb-1 md:mb-4 text-center"
       >
         Em Produção
       </h2>
-      <div class="text-[10rem] font-black leading-none text-amber-500">
+      <div class="text-8xl md:text-[10rem] font-black leading-none text-amber-500">
         {{ qtd_producao|default:"0" }}
       </div>
-      <p class="text-xl text-slate-500 mt-4 uppercase font-black">Na Chapa</p>
+      <p class="text-sm md:text-xl text-slate-500 mt-1 md:mt-4 uppercase font-black">Na Chapa</p>
     </div>
 
     <div
-      class="bg-slate-800 rounded-[3rem] p-8 flex flex-col items-center justify-center border-b-8 border-blue-500 shadow-2xl"
+      class="bg-slate-800 rounded-lg md:rounded-[3rem] p-3 md:p-8 flex flex-col items-center justify-center border-b-4 md:border-b-8 border-blue-500 shadow-2xl"
     >
       <h2
-        class="text-3xl font-bold uppercase tracking-widest text-slate-400 mb-4 text-center"
+        class="text-sm md:text-3xl font-bold uppercase tracking-widest text-slate-400 mb-1 md:mb-4 text-center"
       >
         Disponível
       </h2>
-      <div class="text-[10rem] font-black leading-none text-blue-500">
+      <div class="text-8xl md:text-[10rem] font-black leading-none text-blue-500">
         {{ qtd_estoque|default:"0" }}
       </div>
-      <p class="text-xl text-slate-500 mt-4 uppercase font-black">Em Estoque</p>
+      <p class="text-sm md:text-xl text-slate-500 mt-1 md:mt-4 uppercase font-black">Em Estoque</p>
     </div>
   </div>
 
-  <div class="mt-12 text-center">
+  <div class="mt-2 md:mt-12 text-center">
     <p
-      class="text-slate-600 font-bold uppercase tracking-[0.5em] text-sm animate-pulse"
+      class="text-slate-600 font-bold uppercase tracking-[0.5em] text-xs md:text-sm animate-pulse"
     >
       Atualização automática em tempo real
     </p>
@@ -78,6 +78,13 @@
   body {
     background-color: #0f172a;
     overflow: hidden;
+  }
+
+  /* Otimizações para landscape mobile */
+  @media (max-width: 768px) and (orientation: landscape) {
+    .min-h-screen {
+      min-height: 100vh;
+    }
   }
 </style>
 {% endblock %}

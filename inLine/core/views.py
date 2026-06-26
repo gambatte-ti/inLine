@@ -33,6 +33,7 @@ class CreatePratoAPIView(APIView):
         nome = request.data.get("nome")
         preco = request.data.get("preco")
         estoque = request.data.get("estoque")
+        nome_pagina = request.data.get("nome_pagina")
 
         if not nome or not preco:
             return Response({"error": "Nome e preço são obrigatórios"}, status=400)
@@ -42,6 +43,7 @@ class CreatePratoAPIView(APIView):
                 nome=nome,
                 preco=preco,
                 estoque=estoque,
+                nome_pagina=nome_pagina,
                 ativo=True
             )
             return Response({"id": str(prato.id), "status": "salvo"}, status=201)
@@ -491,29 +493,29 @@ class PainelPorPratoView(TemplateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        prato_id_str = self.kwargs.get('id')
+        prato_nome_pagina = self.kwargs.get('nome_pagina')
         
         try:
             # 1. Converte a string contínua da URL para o formato UUID do banco
-            prato_uuid = uuid.UUID(str(prato_id_str))
-            prato = Prato.objects.filter(id=prato_uuid).first()
-            
+            # 
+            prato = Prato.objects.filter(nome_pagina=prato_nome_pagina).first()
+
             # 2. Conta apenas os itens que estão na chapa (Status EM_PRODUCAO)
             qtd_producao = FilaPrato.objects.filter(
-                prato_id=prato_uuid,
+                prato_id=prato.id if prato else None,
                 status=FilaPrato.Status.EM_PRODUCAO
             ).count()
 
             # 3. Conta apenas os itens em espera (Status PENDENTE)
             # Adicionamos o filtro no pedido pai para garantir que só contamos itens de pedidos ativos
             qtd_pendente = FilaPrato.objects.filter(
-                prato_id=prato_uuid,
+                prato_id=prato.id if prato else None,
                 status=FilaPrato.Status.PENDENTE,
                 pedido__status__in=[Pedido.Status.PENDENTE, Pedido.Status.PRODUCAO]
             ).count()
 
             # 4. Alimenta as variáveis que o HTML está esperando
-            context['prato_id'] = str(prato_uuid)
+            context['prato_id'] = str(prato.id) if prato else None
             context['nome_prato'] = prato.nome if prato else "Prato não encontrado"
             context['qtd_producao'] = qtd_producao
             context['qtd_pendente'] = qtd_pendente
